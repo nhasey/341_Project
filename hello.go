@@ -1,13 +1,21 @@
 package main
 
 import (
-	"bufio"
+	_ "embed"
 	"fmt"
-	"os"
+	_ "image/png"
 	"strconv"
-	"strings"
 	"sync"
+
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/widget"
 )
+
+//go:embed icon.png
+var iconData []byte
 
 type Player struct {
 	Name  string
@@ -15,14 +23,12 @@ type Player struct {
 }
 
 type Game struct {
-	ID       int
-	TeamA    string
-	TeamB    string
-	ScoreA   int
-	ScoreB   int
-	ScorersA []Player
-	ScorersB []Player
-	Players  []Player
+	ID      int
+	TeamA   string
+	TeamB   string
+	ScoreA  int
+	ScoreB  int
+	Players []Player
 }
 
 var (
@@ -31,181 +37,145 @@ var (
 	mu     sync.Mutex
 )
 
-func addGame(teamA, teamB string) int {
+func addGame(teamA, teamB string, players []Player, scoreA, scoreB int) int {
 	mu.Lock()
 	defer mu.Unlock()
 	gameID++
-	newGame := Game{ID: gameID, TeamA: teamA, TeamB: teamB}
+	newGame := Game{
+		ID:      gameID,
+		TeamA:   teamA,
+		TeamB:   teamB,
+		ScoreA:  scoreA,
+		ScoreB:  scoreB,
+		Players: players,
+	}
 	games = append(games, newGame)
 	return gameID
 }
 
-func validateTeamName(id int, teamName string) bool {
+func listGamesUI() *fyne.Container {
 	mu.Lock()
 	defer mu.Unlock()
 
-	for _, game := range games {
-		if game.ID == id && (game.TeamA == teamName || game.TeamB == teamName) {
-			return true
+	list := container.NewVBox()
+	for _, g := range games {
+		header := widget.NewLabel(fmt.Sprintf("Game %d: %s vs %s | Score: %d-%d", g.ID, g.TeamA, g.TeamB, g.ScoreA, g.ScoreB))
+		list.Add(header)
+		for _, p := range g.Players {
+			list.Add(widget.NewLabel(fmt.Sprintf("  Player: %s | Goals: %d", p.Name, p.Goals)))
 		}
+		list.Add(widget.NewSeparator())
 	}
-	return false
+	return container.NewStack(container.NewVScroll(list))
 }
 
-func updateScore(id, scoreA, scoreB int) {
-	mu.Lock()
-	defer mu.Unlock()
-	for i, game := range games {
-		if game.ID == id {
-			games[i].ScoreA = scoreA
-			games[i].ScoreB = scoreB
+func showAddGamePopup(win fyne.Window) {
+	teamAEntry := widget.NewEntry()
+	teamAEntry.SetPlaceHolder("Team A")
+
+	teamBEntry := widget.NewEntry()
+	teamBEntry.SetPlaceHolder("Team B")
+
+	scoreAEntry := widget.NewEntry()
+	scoreAEntry.SetPlaceHolder("Score A")
+
+	scoreBEntry := widget.NewEntry()
+	scoreBEntry.SetPlaceHolder("Score B")
+
+	playerName := widget.NewEntry()
+	playerGoals := widget.NewEntry()
+	players := []Player{}
+	playerListLabel := widget.NewLabel("No players added yet.")
+
+	addPlayerBtn := widget.NewButton("Add Player", func() {
+		name := playerName.Text
+		goals, err := strconv.Atoi(playerGoals.Text)
+		if name == "" || err != nil {
+			dialog.ShowError(fmt.Errorf("invalid player input"), win)
 			return
 		}
-	}
-}
+		players = append(players, Player{Name: name, Goals: goals})
+		playerName.SetText("")
+		playerGoals.SetText("")
+		updatePlayerListLabel(players, playerListLabel)
+	})
 
-func addPlayerToGame(id int, player Player) {
-	mu.Lock()
-	defer mu.Unlock()
-	for i, game := range games {
-		if game.ID == id {
-			games[i].Players = append(games[i].Players, player)
-			return
+	form := container.NewVBox(
+		teamAEntry,
+		teamBEntry,
+		scoreAEntry,
+		scoreBEntry,
+		widget.NewSeparator(),
+		widget.NewLabel("Add Player:"),
+		playerName,
+		playerGoals,
+		addPlayerBtn,
+		playerListLabel,
+	)
+
+	dialog.ShowCustomConfirm("Add New Game", "Add", "Cancel", form, func(confirm bool) {
+		if confirm {
+			teamA := teamAEntry.Text
+			teamB := teamBEntry.Text
+			scoreA, errA := strconv.Atoi(scoreAEntry.Text)
+			scoreB, errB := strconv.Atoi(scoreBEntry.Text)
+
+			if teamA == "" || teamB == "" || errA != nil || errB != nil {
+				dialog.ShowError(fmt.Errorf("invalid game data"), win)
+				return
+			}
+
+			addGame(teamA, teamB, players, scoreA, scoreB)
+			dialog.ShowInformation("Success", "Game added successfully!", win)
 		}
-	}
+	}, win)
 }
 
-func listGames() {
-	mu.Lock()
-	defer mu.Unlock()
-	for _, game := range games {
-		fmt.Printf("Game %d: %s vs %s | Score: %d-%d\n", game.ID, game.TeamA, game.TeamB, game.ScoreA, game.ScoreB)
-		for _, player := range game.Players {
-			fmt.Printf("  Player: %s | Goals: %d\n", player.Name, player.Goals)
-		}
+func updatePlayerListLabel(players []Player, label *widget.Label) {
+	if len(players) == 0 {
+		label.SetText("No players added yet.")
+		return
 	}
+	text := "Players:\n"
+	for _, p := range players {
+		text += fmt.Sprintf("- %s (%d goals)\n", p.Name, p.Goals)
+	}
+	label.SetText(text)
 }
 
-func sumGoals(goals map[string]int) int {
-	total := 0
-	for _, g := range goals {
-		total += g
-	}
-	return total
+func showGameListPopup(win fyne.Window) {
+	content := listGamesUI()
+	dialog.ShowCustom("All Games", "Close", content, win)
 }
 
 func main() {
-	scanner := bufio.NewScanner(os.Stdin)
-	for {
-		fmt.Println("\n==============================")
-		fmt.Println("Football Match Tracker")
-		fmt.Println("==============================")
-		fmt.Println("1. Add New Game")
-		fmt.Println("2. Update Game Score")
-		fmt.Println("3. Add Player Stats")
-		fmt.Println("4. Show All Games")
-		fmt.Println("5. Exit")
-		fmt.Print("Choose an option (1-5): ")
+	a := app.New()
+	w := a.NewWindow("Football Match Tracker")
 
-		scanner.Scan()
-		choice := strings.TrimSpace(scanner.Text())
-		fmt.Println()
+	icon := fyne.NewStaticResource("icon.png", iconData)
+	w.SetIcon(icon)
+	w.SetTitle("Football Match Tracker")
+	w.Resize(fyne.NewSize(600, 400))
 
-		switch choice {
-		case "1":
-			fmt.Println("Add New Game")
-			fmt.Print("Enter Team A: ")
-			scanner.Scan()
-			teamA := strings.TrimSpace(scanner.Text())
-			fmt.Print("Enter Team B: ")
-			scanner.Scan()
-			teamB := strings.TrimSpace(scanner.Text())
-			gameID := addGame(teamA, teamB)
+	menu := fyne.NewMainMenu(
+		fyne.NewMenu("File",
+			fyne.NewMenuItem("Quit", func() {
+				a.Quit()
+			}),
+		),
+		fyne.NewMenu("Actions",
+			fyne.NewMenuItem("Add Game", func() {
+				showAddGamePopup(w)
+			}),
+			fyne.NewMenuItem("View Games", func() {
+				showGameListPopup(w)
+			}),
+		),
+	)
 
-			goalsA := make(map[string]int)
-			goalsB := make(map[string]int)
+	w.SetMainMenu(menu)
 
-			fmt.Println("\nEnter all goals scored in the match (type 'x' to finish):")
-			for {
-				fmt.Print("Goal format (Team,Player): ")
-				scanner.Scan()
-				input := strings.TrimSpace(scanner.Text())
-
-				if input == "x" {
-					fmt.Println("All goals entered.")
-					break
-				}
-
-				inputSplit := strings.Split(input, ",")
-				if len(inputSplit) >= 2 {
-					team := strings.TrimSpace(inputSplit[0])
-					player := strings.TrimSpace(inputSplit[1])
-
-					if !validateTeamName(gameID, team) {
-						fmt.Println("Invalid team name. Try again.")
-						continue
-					}
-
-					if team == teamA {
-						goalsA[player]++
-					} else if team == teamB {
-						goalsB[player]++
-					}
-
-					fmt.Printf("Goal recorded - Team: %s | Player: %s | Total Goals: %d\n", team, player, goalsA[player]+goalsB[player])
-				} else {
-					fmt.Println("Invalid input format. Please use Team,Player.")
-				}
-			}
-
-			for name, goals := range goalsA {
-				addPlayerToGame(gameID, Player{Name: name, Goals: goals})
-			}
-			for name, goals := range goalsB {
-				addPlayerToGame(gameID, Player{Name: name, Goals: goals})
-			}
-
-			updateScore(gameID, sumGoals(goalsA), sumGoals(goalsB))
-			fmt.Printf("Game successfully added with ID: %d\n", gameID)
-
-		case "2":
-			fmt.Println("Update Game Score")
-			fmt.Print("Enter Game ID: ")
-			scanner.Scan()
-			id, _ := strconv.Atoi(scanner.Text())
-			fmt.Print("Enter Score for Team A: ")
-			scanner.Scan()
-			scoreA, _ := strconv.Atoi(scanner.Text())
-			fmt.Print("Enter Score for Team B: ")
-			scanner.Scan()
-			scoreB, _ := strconv.Atoi(scanner.Text())
-			updateScore(id, scoreA, scoreB)
-			fmt.Println("Score updated.")
-
-		case "3":
-			fmt.Println("Add Player to Game")
-			fmt.Print("Enter Game ID: ")
-			scanner.Scan()
-			id, _ := strconv.Atoi(scanner.Text())
-			fmt.Print("Enter Player Name: ")
-			scanner.Scan()
-			name := scanner.Text()
-			fmt.Print("Enter Goals Scored: ")
-			scanner.Scan()
-			goals, _ := strconv.Atoi(scanner.Text())
-			addPlayerToGame(id, Player{Name: name, Goals: goals})
-			fmt.Println("Player added.")
-
-		case "4":
-			fmt.Println("Game List:")
-			listGames()
-
-		case "5":
-			fmt.Println("Exiting... Goodbye.")
-			return
-
-		default:
-			fmt.Println("Invalid option, please choose between 1 and 5.")
-		}
-	}
+	home := container.NewCenter(widget.NewLabel("Welcome to Football Match Tracker!\nUse the menu to perform actions."))
+	w.SetContent(home)
+	w.ShowAndRun()
 }
