@@ -125,8 +125,10 @@ func loadCardsFromCSV(win fyne.Window, collection *[]GameCard, cardContainer *fy
 		gameDate := record[5]
 
 		// Create a card for each record
-		card := createGameCardFromData(win, collection, teamA, teamB, scoreA, scoreB, comments, gameDate)
-		cardContainer.Add(card.Container)
+		gameCard := createGameCardFromData(win, collection, teamA, teamB, scoreA, scoreB, comments, gameDate)
+
+		// Add the card's container to the cardContainer
+		cardContainer.Add(gameCard.Container)
 	}
 
 	// Sort cards by date
@@ -142,19 +144,27 @@ func loadCardsFromCSV(win fyne.Window, collection *[]GameCard, cardContainer *fy
 
 // Create a card from CSV data
 func createGameCardFromData(win fyne.Window, collection *[]GameCard, teamA, teamB, scoreA, scoreB, comments, gameDate string) GameCard {
-	card := widget.NewCard(fmt.Sprintf("%s vs %s", teamA, teamB), fmt.Sprintf("Score: %s - %s | Date: %s", scoreA, scoreB, gameDate), widget.NewLabel(comments))
+	card := widget.NewCard(
+		fmt.Sprintf("%s vs %s", teamA, teamB),
+		fmt.Sprintf("Score: %s - %s | Date: %s", scoreA, scoreB, gameDate),
+		widget.NewLabel(comments),
+	)
 	card.Resize(fyne.NewSize(300, 80)) // Adjust the size to make it smaller
 
 	// Wrap the card in a tappable container
 	tappableCardContainer := createTappableCard(win, collection, card, container.NewMax(card))
 
+	// Create the GameCard object
 	gameCard := GameCard{Card: card, Container: tappableCardContainer}
+
+	// Add the GameCard to the collection
 	addCardToCollection(collection, gameCard)
+
 	return gameCard
 }
 
 // Function to create the edit card dialog
-func createEditCardDialog(win fyne.Window, card *widget.Card, collection *[]GameCard, cardContainer *fyne.Container) fyne.CanvasObject {
+func createEditCardDialog(card *widget.Card) (*widget.Entry, *widget.Entry, *widget.Entry, *widget.Entry, *widget.Entry, *widget.Entry, fyne.CanvasObject) {
 	teamAEntry := widget.NewEntry()
 	teamBEntry := widget.NewEntry()
 	scoreAEntry := widget.NewEntry()
@@ -181,7 +191,6 @@ func createEditCardDialog(win fyne.Window, card *widget.Card, collection *[]Game
 
 	commentsEntry.SetText(card.Content.(*widget.Label).Text)
 
-	// Create a vertical layout for the input fields
 	form := container.NewVBox(
 		widget.NewLabel("Team A:"),
 		teamAEntry,
@@ -197,26 +206,7 @@ func createEditCardDialog(win fyne.Window, card *widget.Card, collection *[]Game
 		commentsEntry,
 	)
 
-	// Save changes to the card
-	dialog.ShowCustomConfirm("Edit Card", "Save", "Cancel", form, func(confirmed bool) {
-		if confirmed {
-			// Update the card's title, subtitle, and content
-			card.SetTitle(fmt.Sprintf("%s vs %s", teamAEntry.Text, teamBEntry.Text))
-			card.SetSubTitle(fmt.Sprintf("Score: %s - %s | Date: %s", scoreAEntry.Text, scoreBEntry.Text, dateEntry.Text))
-
-			// Replace the card's content with the updated comments
-			card.SetContent(widget.NewLabel(commentsEntry.Text))
-			card.Refresh() // Refresh the card to display updated content
-
-			// Save the updated collection to the CSV file
-			err := saveCardsToCSV(*collection)
-			if err != nil {
-				dialog.ShowError(err, win)
-			}
-		}
-	}, win)
-
-	return form
+	return teamAEntry, teamBEntry, scoreAEntry, scoreBEntry, commentsEntry, dateEntry, form
 }
 
 // Helper function to sort cards by date
@@ -230,8 +220,18 @@ func sortCardsByDate(collection *[]GameCard) {
 		dateJ := extractDateFromSubtitle(cardJ.Subtitle)
 
 		// Parse dates
-		parsedDateI, _ := time.Parse("2006-01-02", dateI)
-		parsedDateJ, _ := time.Parse("2006-01-02", dateJ)
+		parsedDateI, errI := time.Parse("2006-01-02", dateI)
+		parsedDateJ, errJ := time.Parse("2006-01-02", dateJ)
+
+		// Handle parsing errors
+		if errI != nil {
+			fmt.Printf("Error parsing date for card %s: %v\n", cardI.Title, errI)
+			return false
+		}
+		if errJ != nil {
+			fmt.Printf("Error parsing date for card %s: %v\n", cardJ.Title, errJ)
+			return true
+		}
 
 		// Sort in ascending order
 		return parsedDateI.Before(parsedDateJ)
@@ -313,10 +313,20 @@ func createTappableCard(win fyne.Window, collection *[]GameCard, card *widget.Ca
 	// Edit button
 	editButton := widget.NewButtonWithIcon("", theme.DocumentCreateIcon(), func() {
 		if cardContainer != nil {
-			dialog.ShowCustomConfirm("Edit Card", "Save", "Cancel", createEditCardDialog(win, card, collection, cardContainer), func(confirmed bool) {
+			teamAEntry, teamBEntry, scoreAEntry, scoreBEntry, commentsEntry, dateEntry, form := createEditCardDialog(card)
+
+			dialog.ShowCustomConfirm("Edit Card", "Save", "Cancel", form, func(confirmed bool) {
 				if confirmed {
+					card.SetTitle(fmt.Sprintf("%s vs %s", teamAEntry.Text, teamBEntry.Text))
+					card.SetSubTitle(fmt.Sprintf("Score: %s - %s | Date: %s", scoreAEntry.Text, scoreBEntry.Text, dateEntry.Text))
+					card.SetContent(widget.NewLabel(commentsEntry.Text))
+					card.Refresh()
 					cardContainer.Refresh()
-					saveCardsToCSV(*collection)
+
+					err := saveCardsToCSV(*collection)
+					if err != nil {
+						dialog.ShowError(err, win)
+					}
 				}
 			}, win)
 		}
